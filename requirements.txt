@@ -1,0 +1,5 @@
+pytest==9.0.2
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.10.0+cpu
+torchaudio==2.10.0+cpu
+speechbrain==1.0.3
