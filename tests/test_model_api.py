@@ -1,7 +1,12 @@
 import sys
 import types
 
-from vad_baseline.model import MODEL_SOURCE, load_vad_model, model_source_name
+from vad_baseline.model import (
+    MODEL_SOURCE,
+    _ensure_torchaudio_backend_compat,
+    load_vad_model,
+    model_source_name,
+)
 
 
 def test_model_source_name_is_fixed():
@@ -118,3 +123,31 @@ def test_load_vad_model_converts_missing_default_custom_py(monkeypatch):
     result = load_vad_model({"device": "cpu"})
 
     assert result == "fake-vad"
+
+
+def test_torchaudio_info_compat_uses_torchcodec_metadata(monkeypatch):
+    class FakeTorchAudio:
+        list_audio_backends = staticmethod(lambda: [])
+
+    class FakeMetadata:
+        sample_rate = 16000
+        duration_seconds = 2.5
+
+    class FakeAudioDecoder:
+        def __init__(self, source):
+            self.metadata = FakeMetadata()
+
+    fake_decoders = types.ModuleType("torchcodec.decoders")
+    fake_decoders.AudioDecoder = FakeAudioDecoder
+
+    monkeypatch.setitem(sys.modules, "torchaudio", FakeTorchAudio)
+    monkeypatch.setitem(sys.modules, "torchcodec.decoders", fake_decoders)
+
+    _ensure_torchaudio_backend_compat()
+
+    import torchaudio
+
+    info = torchaudio.info("float.wav")
+
+    assert info.sample_rate == 16000
+    assert info.num_frames == 40000

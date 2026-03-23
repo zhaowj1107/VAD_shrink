@@ -10,6 +10,28 @@ def model_source_name() -> str:
     return MODEL_SOURCE
 
 
+def get_audio_metadata(audio_file):
+    try:
+        from torchcodec.decoders import AudioDecoder
+
+        metadata = AudioDecoder(str(audio_file)).metadata
+        sample_rate = getattr(metadata, "sample_rate", None)
+        duration_seconds = getattr(metadata, "duration_seconds", None)
+        if sample_rate and duration_seconds is not None:
+            return SimpleNamespace(
+                sample_rate=int(sample_rate),
+                num_frames=int(round(float(duration_seconds) * float(sample_rate))),
+            )
+    except Exception:
+        pass
+
+    with wave.open(str(audio_file), "rb") as handle:
+        return SimpleNamespace(
+            sample_rate=handle.getframerate(),
+            num_frames=handle.getnframes(),
+        )
+
+
 def _ensure_torchaudio_backend_compat() -> None:
     import torchaudio
 
@@ -18,11 +40,7 @@ def _ensure_torchaudio_backend_compat() -> None:
 
     if not hasattr(torchaudio, "info"):
         def compat_info(audio_file):
-            with wave.open(str(audio_file), "rb") as handle:
-                return SimpleNamespace(
-                    sample_rate=handle.getframerate(),
-                    num_frames=handle.getnframes(),
-                )
+            return get_audio_metadata(audio_file)
 
         torchaudio.info = compat_info
 

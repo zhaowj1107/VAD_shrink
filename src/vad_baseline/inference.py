@@ -1,4 +1,4 @@
-import wave
+from vad_baseline.model import get_audio_metadata
 
 
 def _to_python(value):
@@ -54,9 +54,9 @@ def normalize_frame_probabilities(frame_probabilities):
 
 
 def get_wav_duration_sec(audio_path):
-    with wave.open(str(audio_path), "rb") as handle:
-        sample_rate = handle.getframerate()
-        frame_count = handle.getnframes()
+    metadata = get_audio_metadata(audio_path)
+    sample_rate = metadata.sample_rate
+    frame_count = metadata.num_frames
 
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive")

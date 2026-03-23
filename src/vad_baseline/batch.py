@@ -108,12 +108,24 @@ def _mean_optional_field(rows, field_name):
     return _stable_mean(values)
 
 
+def _with_backend_metadata(payload, backend):
+    if backend is None:
+        return payload
+    return {
+        "backend_name": backend.backend_name,
+        "model_name": backend.model_name,
+        **payload,
+    }
+
+
 def process_manifest_entry(
     entry,
     vad_model,
     output_dir,
     save_frame_probs=False,
     timer=perf_counter,
+    backend=None,
+    stage_callbacks=None,
 ):
     audio_path = Path(entry["audio_path"])
     item_id = entry["id"]
@@ -125,9 +137,16 @@ def process_manifest_entry(
 
     try:
         audio_duration_sec = get_wav_duration_sec(audio_path)
+        if stage_callbacks and "after_metadata" in stage_callbacks:
+            stage_callbacks["after_metadata"]()
         started_at = timer()
-        segments = run_vad_on_file(vad_model, audio_path)
+        if backend is None:
+            segments = run_vad_on_file(vad_model, audio_path)
+        else:
+            segments = backend.predict_segments(vad_model, audio_path)
         inference_time_sec = timer() - started_at
+        if stage_callbacks and "after_inference" in stage_callbacks:
+            stage_callbacks["after_inference"]()
 
         write_json(Path(output_dir) / segments_rel_path, segments)
 
@@ -142,22 +161,40 @@ def process_manifest_entry(
             metrics_path = metrics_rel_path.as_posix()
 
         if save_frame_probs:
-            frame_probabilities = get_frame_probabilities_for_file(
-                vad_model,
-                audio_path,
-            )
-            write_frame_probs_csv(
-                Path(output_dir) / frame_probs_rel_path,
-                frame_probabilities,
-            )
+            if backend is None:
+                frame_probabilities = get_frame_probabilities_for_file(
+                    vad_model,
+                    audio_path,
+                )
+            elif getattr(backend, "supports_frame_probabilities", False):
+                frame_probabilities = backend.predict_frame_probabilities(
+                    vad_model,
+                    audio_path,
+                )
+            else:
+                frame_probabilities = None
+
+            if frame_probabilities is not None:
+                write_frame_probs_csv(
+                    Path(output_dir) / frame_probs_rel_path,
+                    frame_probabilities,
+                )
+
+        if stage_callbacks and "after_scoring" in stage_callbacks:
+            stage_callbacks["after_scoring"]()
 
         benchmark = build_benchmark_summary(
-            model_name="speechbrain/vad-crdnn-libriparty",
+            model_name=(
+                backend.model_name
+                if backend is not None
+                else "speechbrain/vad-crdnn-libriparty"
+            ),
             audio_duration_sec=audio_duration_sec,
             inference_time_sec=inference_time_sec,
         )
 
-        return {
+        return _with_backend_metadata(
+            {
             "id": item_id,
             "audio_path": str(audio_path),
             "annotation_path": annotation_path,
@@ -168,16 +205,21 @@ def process_manifest_entry(
             "num_segments": len(segments),
             "segments_path": segments_rel_path.as_posix(),
             "frame_probs_path": (
-                frame_probs_rel_path.as_posix() if save_frame_probs else None
+                frame_probs_rel_path.as_posix()
+                if save_frame_probs and frame_probabilities is not None
+                else None
             ),
             "metrics_path": metrics_path,
             "has_annotation": has_annotation,
             "scored": scored,
             **metrics,
             "error": None,
-        }
+            },
+            backend,
+        )
     except Exception as error:
-        return {
+        return _with_backend_metadata(
+            {
             "id": item_id,
             "audio_path": str(audio_path),
             "annotation_path": annotation_path,
@@ -193,7 +235,9 @@ def process_manifest_entry(
             "scored": False,
             **_empty_metric_fields(),
             "error": str(error),
-        }
+            },
+            backend,
+        )
 
 
 def summarize_results(results):
@@ -269,21 +313,37 @@ def run_batch_evaluation(
     manifest_path,
     output_dir,
     save_frame_probs=False,
+    backend=None,
+    load_model_fn=None,
+    process_manifest_entry_fn=None,
 ):
     entries = read_manifest(manifest_path)
     output_dir = Path(output_dir)
-    vad_model = load_vad_model()
+    load_model_fn = load_model_fn or load_vad_model
+    process_manifest_entry_fn = process_manifest_entry_fn or process_manifest_entry
+    vad_model = load_model_fn() if backend is None else backend.load()
 
     results = [
-        process_manifest_entry(
-            entry,
-            vad_model,
-            output_dir,
-            save_frame_probs=save_frame_probs,
+        (
+            process_manifest_entry_fn(
+                entry,
+                vad_model,
+                output_dir,
+                save_frame_probs=save_frame_probs,
+            )
+            if backend is None
+            else process_manifest_entry_fn(
+                entry,
+                vad_model,
+                output_dir,
+                save_frame_probs=save_frame_probs,
+                backend=backend,
+            )
         )
         for entry in entries
     ]
     summary = summarize_results(results)
+    summary = _with_backend_metadata(summary, backend)
 
     write_jsonl(output_dir / "per_file.jsonl", results)
     write_json(output_dir / "summary.json", summary)

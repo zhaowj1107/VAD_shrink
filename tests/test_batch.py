@@ -254,6 +254,51 @@ def test_process_manifest_entry_records_failures_without_raising(
     assert result["metrics_path"] is None
 
 
+def test_process_manifest_entry_uses_backend_object_and_records_backend_name(
+    tmp_path,
+    monkeypatch,
+):
+    audio = tmp_path / "a.wav"
+    _write_wav(audio)
+    output_dir = tmp_path / "batch_out"
+    timer_values = iter([20.0, 20.5])
+    calls = {}
+
+    class FakeBackend:
+        backend_name = "fake_backend"
+        model_name = "fake/model"
+        supports_frame_probabilities = True
+
+        @staticmethod
+        def predict_segments(vad_model, audio_path):
+            calls["segments"] = (vad_model, str(audio_path))
+            return [{"start": 0.0, "end": 0.8, "duration": 0.8}]
+
+        @staticmethod
+        def predict_frame_probabilities(vad_model, audio_path):
+            calls["frame_probs"] = (vad_model, str(audio_path))
+            return [{"frame_index": 0, "speech_probability": 0.7}]
+
+    monkeypatch.setattr(batch, "get_wav_duration_sec", lambda path: 4.0)
+
+    result = batch.process_manifest_entry(
+        {"id": "utt1", "audio_path": str(audio)},
+        vad_model="fake-model",
+        output_dir=output_dir,
+        save_frame_probs=True,
+        timer=lambda: next(timer_values),
+        backend=FakeBackend(),
+    )
+
+    assert calls == {
+        "segments": ("fake-model", str(audio)),
+        "frame_probs": ("fake-model", str(audio)),
+    }
+    assert result["backend_name"] == "fake_backend"
+    assert result["model_name"] == "fake/model"
+    assert result["frame_probs_path"] == "items/utt1/frame_probs.csv"
+
+
 def test_summarize_results_aggregates_successes_and_failures():
     summary = batch.summarize_results(
         [
@@ -305,6 +350,86 @@ def test_summarize_results_aggregates_successes_and_failures():
         "mean_miss_rate": None,
         "scoring_time_resolution_sec": None,
     }
+
+
+def test_run_batch_evaluation_uses_backend_and_records_backend_name(
+    tmp_path,
+):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text("id,audio_path\nutt1,a.wav\n")
+    output_dir = tmp_path / "batch_out"
+    calls = {"loads": 0, "processed": []}
+
+    class FakeBackend:
+        backend_name = "fake_backend"
+        model_name = "fake/model"
+
+        @staticmethod
+        def load():
+            calls["loads"] += 1
+            return "fake-model"
+
+    def fake_process_manifest_entry(
+        entry,
+        vad_model,
+        output_dir,
+        save_frame_probs=False,
+        timer=None,
+        backend=None,
+    ):
+        calls["processed"].append(
+            (
+                entry["id"],
+                vad_model,
+                str(output_dir),
+                save_frame_probs,
+                backend.backend_name,
+            )
+        )
+        return {
+            "id": entry["id"],
+            "audio_path": entry["audio_path"],
+            "annotation_path": None,
+            "backend_name": backend.backend_name,
+            "model_name": backend.model_name,
+            "status": "success",
+            "audio_duration_sec": 2.0,
+            "inference_time_sec": 0.5,
+            "rtf": 0.25,
+            "num_segments": 1,
+            "segments_path": "items/utt1/segments.json",
+            "frame_probs_path": None,
+            "metrics_path": None,
+            "has_annotation": False,
+            "scored": False,
+            "reference_speech_sec": None,
+            "predicted_speech_sec": None,
+            "tp_sec": None,
+            "fp_sec": None,
+            "fn_sec": None,
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "false_alarm_rate": None,
+            "miss_rate": None,
+            "time_resolution_sec": None,
+            "error": None,
+        }
+
+    summary = batch.run_batch_evaluation(
+        manifest_path=manifest,
+        output_dir=output_dir,
+        backend=FakeBackend(),
+        process_manifest_entry_fn=fake_process_manifest_entry,
+    )
+
+    assert calls["loads"] == 1
+    assert calls["processed"] == [
+        ("utt1", "fake-model", str(output_dir), False, "fake_backend")
+    ]
+    assert summary["backend_name"] == "fake_backend"
+    assert summary["model_name"] == "fake/model"
+    assert json.loads((output_dir / "summary.json").read_text()) == summary
 
 
 def test_summarize_results_aggregates_scored_metrics():

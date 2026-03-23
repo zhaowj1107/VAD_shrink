@@ -1,17 +1,17 @@
 import argparse
 
 from vad_baseline.backends import get_backend, list_backend_names
-from vad_baseline.batch import run_batch_evaluation
+from vad_baseline.profiling import profile_batch_manifest
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Run batch VAD evaluation from a CSV manifest.",
+        description="Profile a selectable VAD backend on an existing manifest.",
     )
     parser.add_argument("manifest_path")
     parser.add_argument(
         "--output-dir",
-        default="outputs/batch_run",
+        default="outputs/profile_run",
     )
     parser.add_argument(
         "--save-frame-probs",
@@ -40,7 +40,7 @@ def main(argv=None):
     if args.onnx_model_path:
         backend_kwargs["onnx_model_path"] = args.onnx_model_path
     backend = get_backend(args.backend, **backend_kwargs)
-    run_batch_evaluation(
+    profile_batch_manifest(
         args.manifest_path,
         args.output_dir,
         save_frame_probs=args.save_frame_probs,
