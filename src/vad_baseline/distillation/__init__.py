@@ -2,5 +2,6 @@
 """VAD distillation module."""
 
 from vad_baseline.distillation.config import DistillationConfig
+from vad_baseline.distillation.student_model import SimplifiedCRDNN
 
-__all__ = ["DistillationConfig"]
+__all__ = ["DistillationConfig", "SimplifiedCRDNN"]
