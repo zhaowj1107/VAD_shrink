@@ -6,6 +6,7 @@ Currently supported batch/profiling backends:
 
 - `speechbrain_fp32`
 - `speechbrain_dynamic_int8`
+- `speechbrain_static_int8`
 - `speechbrain_onnx_runtime`
 - `energy_zcr`
 - `webrtc_vad`
@@ -40,13 +41,23 @@ Downloaded LibriParty data is currently stored under:
 
 - `data/external/LibriParty/dataset`
 
+Bootstrap the LibriParty dev dataset (downloads ~1 GB the first time, builds 10 sessions):
+
+```bash
+PYTHONPATH=src python scripts/bootstrap_libriparty_dataset.py --dev-sessions 10
+```
+
+This script downloads LibriSpeech dev-clean and RIRS_NOISES (if not already present under
+`data/external/LibriParty/downloads/`) and generates synthetic multi-speaker mixtures under
+`data/external/LibriParty/dataset/dev/`.
+
 Generate a LibriParty-specific manifest plus repository-native annotations:
 
 ```bash
 PYTHONPATH=src python scripts/generate_libriparty_manifest.py \
   --dataset-root data/external/LibriParty/dataset \
   --subset dev \
-  --limit 2 \
+  --limit 10 \
   --output-dir outputs/libriparty_dev_manifest
 ```
 
@@ -69,6 +80,7 @@ Generated export artifacts:
 
 - `outputs/onnx_export/model.onnx`
 - `outputs/onnx_export/model.metadata.json`
+- `outputs/onnx_export/model.fbank.npz` — mel filterbank matrix + Hamming window (NumPy sidecar; required by the ONNX runtime, no PyTorch needed at inference)
 
 Profile the FP32 baseline on an existing manifest:
 
@@ -182,13 +194,42 @@ PYTHONPATH=src python scripts/profile_fp32_baseline.py \
   --onnx-model-path outputs/onnx_export/model.onnx
 ```
 
+## Gradio demos
+
+### Single-file ONNX demo
+
+Upload a WAV file and visualise speech segments + frame-level probabilities (no PyTorch required):
+
+```bash
+# Prerequisites: ONNX model exported (see above)
+PYTHONPATH=src python scripts/gradio_demo.py
+```
+
+Opens at http://localhost:7860.
+
+### Multi-backend comparison demo
+
+Compare FP32 / Dynamic INT8 / Static INT8 / ONNX side-by-side on LibriParty dev sessions,
+showing RTF, F1, and first-load time:
+
+```bash
+# Prerequisites:
+#   1. ONNX model exported:  PYTHONPATH=src python scripts/export_speechbrain_onnx.py --output-path outputs/onnx_export/model.onnx
+#   2. LibriParty data ready: PYTHONPATH=src python scripts/bootstrap_libriparty_dataset.py --dev-sessions 10
+#   3. Manifest generated:    PYTHONPATH=src python scripts/generate_libriparty_manifest.py --dataset-root data/external/LibriParty/dataset --subset dev --limit 10 --output-dir outputs/libriparty_dev_manifest
+PYTHONPATH=src python scripts/gradio_compare.py
+```
+
+Opens at http://localhost:7860.  Select the number of sessions, audio duration, and which backends to include, then click **运行对比**.
+
 Notes:
 
 - `--backend` is available on both `scripts/run_batch_evaluation.py` and `scripts/profile_fp32_baseline.py`
 - `--onnx-model-path` is required when `--backend speechbrain_onnx_runtime` is selected
 - `speechbrain_fp32` produces frame probabilities
 - `speechbrain_dynamic_int8` keeps the SpeechBrain model API but dynamically quantizes `GRU` and `Linear` layers at load time
-- `speechbrain_onnx_runtime` uses an exported ONNX artifact plus a sidecar metadata JSON and currently returns speech segments only
+- `speechbrain_onnx_runtime` uses an exported ONNX artifact, a sidecar metadata JSON, and a `.fbank.npz` sidecar; the fbank frontend is pure NumPy so PyTorch is not required at inference time
+- `speechbrain_static_int8` applies post-training static quantisation; requires a calibration manifest (uses LibriParty dev set by default)
 - `energy_zcr` and `webrtc_vad` currently produce speech segments only
 - `requirements.txt` includes `webrtcvad-wheels`, imported in code as `webrtcvad`
 

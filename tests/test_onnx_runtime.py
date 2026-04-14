@@ -94,7 +94,7 @@ def test_load_onnx_vad_runtime_reads_metadata_and_builds_session(tmp_path):
         calls["providers"] = providers
         return "fake-session"
 
-    def fake_feature_extractor_factory(metadata):
+    def fake_feature_extractor_factory(metadata, model_path=None):
         calls["feature_metadata"] = metadata["frontend"]
         return "fake-feature-extractor"
 
@@ -173,3 +173,54 @@ def test_onnx_vad_runtime_predict_segments_from_session_outputs(tmp_path):
         {"start": 0.1, "end": 0.2, "duration": 0.1},
         {"start": 0.6, "end": 0.7, "duration": 0.1},
     ]
+
+
+def test_numpy_fbank_shape_and_dtype():
+    from vad_baseline.onnx_runtime import _numpy_fbank
+
+    mel_matrix = np.random.rand(201, 40).astype(np.float32)
+    window = np.hamming(400).astype(np.float32)
+    wavs = np.zeros((2, 16000), dtype=np.float32)
+
+    feats = _numpy_fbank(wavs, mel_matrix, window, hop_length=160)
+
+    assert feats.shape == (2, 101, 40)  # (batch, frames, mels)
+    assert feats.dtype == np.float32
+
+
+def test_numpy_fbank_1d_input_accepted():
+    from vad_baseline.onnx_runtime import _numpy_fbank
+
+    mel_matrix = np.random.rand(201, 40).astype(np.float32)
+    window = np.hamming(400).astype(np.float32)
+    wav = np.zeros(16000, dtype=np.float32)
+
+    feats = _numpy_fbank(wav, mel_matrix, window, hop_length=160)
+
+    assert feats.shape == (1, 101, 40)
+
+
+def test_build_feature_extractor_numpy_fbank(tmp_path):
+    from vad_baseline.onnx_runtime import build_feature_extractor_from_metadata
+
+    mel_matrix = np.ones((5, 3), dtype=np.float32)
+    window = np.ones(8, dtype=np.float32)
+    np.savez(str(tmp_path / "model.fbank.npz"), mel_matrix=mel_matrix, window=window)
+
+    metadata = {"frontend": "numpy_fbank", "hop_length": 4}
+    extractor = build_feature_extractor_from_metadata(
+        metadata, model_path=str(tmp_path / "model.onnx")
+    )
+
+    wavs = np.zeros((1, 32), dtype=np.float32)
+    feats = extractor(wavs)
+    assert feats.shape[0] == 1
+    assert feats.shape[2] == 3  # n_mels
+    assert feats.dtype == np.float32
+
+
+def test_build_feature_extractor_numpy_fbank_raises_without_model_path():
+    from vad_baseline.onnx_runtime import build_feature_extractor_from_metadata
+
+    with pytest.raises(ValueError, match="model_path"):
+        build_feature_extractor_from_metadata({"frontend": "numpy_fbank"})

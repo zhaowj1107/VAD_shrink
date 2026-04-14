@@ -25,6 +25,9 @@ def build_parser():
     parser.add_argument(
         "--onnx-model-path",
     )
+    parser.add_argument(
+        "--calibration-manifest-path",
+    )
     return parser
 
 
@@ -36,9 +39,16 @@ def main(argv=None):
         and not args.onnx_model_path
     ):
         parser.error("--onnx-model-path is required for speechbrain_onnx_runtime")
+    if (
+        args.backend == "speechbrain_static_int8"
+        and not args.calibration_manifest_path
+    ):
+        parser.error("--calibration-manifest-path is required for speechbrain_static_int8")
     backend_kwargs = {}
     if args.onnx_model_path:
         backend_kwargs["onnx_model_path"] = args.onnx_model_path
+    if args.calibration_manifest_path:
+        backend_kwargs["calibration_manifest_path"] = args.calibration_manifest_path
     backend = get_backend(args.backend, **backend_kwargs)
     run_batch_evaluation(
         args.manifest_path,

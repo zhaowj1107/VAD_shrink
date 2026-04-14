@@ -6,6 +6,9 @@ from vad_baseline.backends.speechbrain_fp32 import SpeechBrainFP32Backend
 from vad_baseline.backends.speechbrain_onnx_runtime import (
     SpeechBrainONNXRuntimeBackend,
 )
+from vad_baseline.backends.speechbrain_static_int8 import (
+    SpeechBrainStaticINT8Backend,
+)
 from vad_baseline.backends.webrtc_vad import WebRTCVADBackend
 
 
@@ -14,6 +17,7 @@ BACKEND_FACTORIES = {
     SpeechBrainDynamicINT8Backend.backend_name: SpeechBrainDynamicINT8Backend,
     SpeechBrainFP32Backend.backend_name: SpeechBrainFP32Backend,
     SpeechBrainONNXRuntimeBackend.backend_name: SpeechBrainONNXRuntimeBackend,
+    SpeechBrainStaticINT8Backend.backend_name: SpeechBrainStaticINT8Backend,
     WebRTCVADBackend.backend_name: WebRTCVADBackend,
 }
 

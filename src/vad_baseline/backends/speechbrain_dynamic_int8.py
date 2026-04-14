@@ -1,3 +1,4 @@
+import sys
 from types import MethodType
 
 import torch
@@ -28,6 +29,9 @@ class SpeechBrainDynamicINT8Backend(SpeechBrainFP32Backend):
     model_name = "speechbrain/vad-crdnn-libriparty-dynamic-int8"
 
     def load(self):
+        # macOS: no FBGEMM; qnnpack is required for dynamic GRU quantization.
+        if sys.platform == "darwin":
+            torch.backends.quantized.engine = "qnnpack"
         vad_model = load_vad_model(self.run_opts)
         vad_model.mods = _ensure_quantized_rnn_compat(
             quantize_dynamic(

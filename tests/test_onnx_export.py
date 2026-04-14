@@ -4,10 +4,23 @@ from types import SimpleNamespace
 import torch
 
 
+class _FakeFbanks:
+    """Minimal fake for SpeechBrain's Filterbank used by extract_fbank_weights."""
+
+    n_stft = 3  # small for tests
+    f_central = torch.tensor([200.0, 400.0])
+    band = torch.tensor([100.0, 100.0])
+
+    def _create_fbank_matrix(self, f_central_mat, band_mat):
+        return torch.ones(3, 2)
+
+
 class _FakeComputeFeatures(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.calls = []
+        self.compute_STFT = SimpleNamespace(window=torch.ones(400))
+        self.compute_fbanks = _FakeFbanks()
 
     def forward(self, wavs):
         self.calls.append(tuple(wavs.shape))
@@ -136,7 +149,9 @@ def test_export_speechbrain_onnx_calls_export_and_writes_metadata(
     }
     assert calls["kwargs"]["opset_version"] == 17
     assert output_path.read_bytes() == b"fake-onnx"
+    fbank_path = tmp_path / "model.fbank.npz"
     assert metadata_path.exists()
+    assert fbank_path.exists()
     assert json.loads(metadata_path.read_text()) == {
         "source_model_name": "speechbrain/vad-crdnn-libriparty",
         "sample_rate": 16000,
@@ -144,18 +159,21 @@ def test_export_speechbrain_onnx_calls_export_and_writes_metadata(
         "input_names": ["feats"],
         "output_names": ["speech_probabilities"],
         "opset_version": 17,
-        "frontend": "speechbrain_fbank",
+        "frontend": "numpy_fbank",
+        "hop_length": 160,
     }
     assert result == {
         "model_path": str(output_path.resolve()),
         "metadata_path": str(metadata_path.resolve()),
+        "fbank_path": str(fbank_path.resolve()),
         "source_model_name": "speechbrain/vad-crdnn-libriparty",
         "sample_rate": 16000,
         "time_resolution": 0.01,
         "input_names": ["feats"],
         "output_names": ["speech_probabilities"],
         "opset_version": 17,
-        "frontend": "speechbrain_fbank",
+        "frontend": "numpy_fbank",
+        "hop_length": 160,
     }
 
 

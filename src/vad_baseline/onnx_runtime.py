@@ -295,35 +295,101 @@ class ONNXVADRuntime:
         ]
 
 
-def build_feature_extractor_from_metadata(metadata):
+def _numpy_fbank(wavs, mel_matrix, window, hop_length=160):
+    """Compute log-mel fbank features using only NumPy (no PyTorch/SpeechBrain).
+
+    Matches SpeechBrain's Fbank pipeline:
+      zero-pad → hamming window → rfft → power spectrum → mel filterbank
+      → 10*log10(clamp(x, 1e-10)) → top-80-dB clip
+
+    Args:
+        wavs:       (batch, samples) or (samples,) float32 array
+        mel_matrix: (n_fft//2+1, n_mels) float32 — linear mel weights
+        window:     (n_fft,) float32 — hamming analysis window
+        hop_length: int, frame hop in samples
+
+    Returns:
+        (batch, num_frames, n_mels) float32
+    """
+    wavs = np.asarray(wavs, dtype=np.float32)
+    if wavs.ndim == 1:
+        wavs = wavs[np.newaxis, :]
+
+    n_fft = len(window)
+    pad = n_fft // 2
+    results = []
+
+    for wav in wavs:
+        padded = np.pad(wav, (pad, pad), mode="constant")
+        n_frames = (len(padded) - n_fft) // hop_length + 1
+        # Use stride tricks to create overlapping frames without copying.
+        frames = np.lib.stride_tricks.as_strided(
+            padded,
+            shape=(n_frames, n_fft),
+            strides=(padded.strides[0] * hop_length, padded.strides[0]),
+        ).copy()
+        windowed = frames * window  # (n_frames, n_fft)
+        stft = np.fft.rfft(windowed, n=n_fft, axis=-1)  # (n_frames, n_fft//2+1)
+        power = stft.real**2 + stft.imag**2  # power spectrum
+        mel = power @ mel_matrix  # (n_frames, n_mels)
+        log_mel = 10.0 * np.log10(np.maximum(mel, 1e-10))
+        log_mel = np.maximum(log_mel, log_mel.max() - 80.0)  # top-80-dB clip
+        results.append(log_mel)
+
+    return np.stack(results, axis=0).astype(np.float32)
+
+
+def build_feature_extractor_from_metadata(metadata, model_path=None):
     frontend_name = metadata.get("frontend")
-    if frontend_name != "speechbrain_fbank":
-        raise ValueError(f"unsupported frontend: {frontend_name}")
 
-    from vad_baseline.model import _ensure_torchaudio_backend_compat
+    if frontend_name == "numpy_fbank":
+        if model_path is None:
+            raise ValueError(
+                "model_path is required to locate the .fbank.npz sidecar "
+                "for a numpy_fbank model"
+            )
+        fbank_path = Path(model_path).with_name(
+            f"{Path(model_path).stem}.fbank.npz"
+        )
+        if not fbank_path.exists():
+            raise FileNotFoundError(f"missing numpy fbank sidecar: {fbank_path}")
+        fbank_data = np.load(str(fbank_path))
+        mel_matrix = fbank_data["mel_matrix"].astype(np.float32)
+        window = fbank_data["window"].astype(np.float32)
+        hop_length = int(metadata.get("hop_length", 160))
 
-    _ensure_torchaudio_backend_compat()
-    import torch
-    from speechbrain.lobes.features import Fbank
+        def extract_features(wavs):
+            return _numpy_fbank(wavs, mel_matrix, window, hop_length)
 
-    frontend = Fbank(
-        deltas=False,
-        context=False,
-        requires_grad=False,
-        sample_rate=int(metadata["sample_rate"]),
-    )
-    frontend.eval()
+        return extract_features
 
-    def extract_features(wavs):
-        wavs = np.asarray(wavs, dtype=np.float32)
-        wavs_tensor = torch.as_tensor(wavs, dtype=torch.float32)
-        if wavs_tensor.ndim == 1:
-            wavs_tensor = wavs_tensor.unsqueeze(0)
-        with torch.no_grad():
-            feats = frontend(wavs_tensor)
-        return feats.detach().cpu().numpy().astype(np.float32)
+    if frontend_name == "speechbrain_fbank":
+        from vad_baseline.model import _ensure_torchaudio_backend_compat
 
-    return extract_features
+        _ensure_torchaudio_backend_compat()
+        import torch
+        from speechbrain.lobes.features import Fbank
+
+        frontend = Fbank(
+            deltas=False,
+            context=False,
+            requires_grad=False,
+            sample_rate=int(metadata["sample_rate"]),
+        )
+        frontend.eval()
+
+        def extract_features(wavs):
+            wavs = np.asarray(wavs, dtype=np.float32)
+            wavs_tensor = torch.as_tensor(wavs, dtype=torch.float32)
+            if wavs_tensor.ndim == 1:
+                wavs_tensor = wavs_tensor.unsqueeze(0)
+            with torch.no_grad():
+                feats = frontend(wavs_tensor)
+            return feats.detach().cpu().numpy().astype(np.float32)
+
+        return extract_features
+
+    raise ValueError(f"unsupported frontend: {frontend_name}")
 
 
 def load_onnx_vad_runtime(
@@ -359,5 +425,5 @@ def load_onnx_vad_runtime(
         time_resolution=float(metadata["time_resolution"]),
         input_names=metadata["input_names"],
         output_names=metadata["output_names"],
-        feature_extractor=feature_extractor_factory(metadata),
+        feature_extractor=feature_extractor_factory(metadata, model_path=str(model_path)),
     )
