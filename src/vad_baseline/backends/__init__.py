@@ -1,3 +1,4 @@
+from vad_baseline.backends.distilled import DistilledBackend
 from vad_baseline.backends.energy_zcr import EnergyZCRBackend
 from vad_baseline.backends.speechbrain_dynamic_int8 import (
     SpeechBrainDynamicINT8Backend,
@@ -10,6 +11,7 @@ from vad_baseline.backends.webrtc_vad import WebRTCVADBackend
 
 
 BACKEND_FACTORIES = {
+    DistilledBackend.backend_name: DistilledBackend,
     EnergyZCRBackend.backend_name: EnergyZCRBackend,
     SpeechBrainDynamicINT8Backend.backend_name: SpeechBrainDynamicINT8Backend,
     SpeechBrainFP32Backend.backend_name: SpeechBrainFP32Backend,
