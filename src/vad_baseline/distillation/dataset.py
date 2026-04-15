@@ -9,7 +9,69 @@ import numpy as np
 import torch
 import torch.nn.utils.rnn as rnn_utils
 import torchaudio
+import torchaudio.functional as F
 from tqdm import tqdm
+
+
+# Mel filterbank parameters matching SpeechBrain VAD
+FBANK_N_MELS = 80  # Standard mel filterbank bins
+FBANK_N_FFT = 512
+FBANK_HOP_LENGTH = 160  # 10ms at 16kHz
+FBANK_WIN_LENGTH = 400  # 25ms at 16kHz
+
+
+class FbankExtractor:
+    """Fbank feature extractor using torchaudio transforms."""
+
+    def __init__(self, sample_rate=16000):
+        self.sample_rate = sample_rate
+        self.mel_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=FBANK_N_FFT,
+            hop_length=FBANK_HOP_LENGTH,
+            win_length=FBANK_WIN_LENGTH,
+            n_mels=FBANK_N_MELS,
+        )
+
+    def __call__(self, audio):
+        """
+        Extract fbank features from audio.
+
+        Args:
+            audio: 1D tensor of audio samples
+
+        Returns:
+            Tensor of shape (time, n_mels)
+        """
+        mel_spec = self.mel_transform(audio)
+        log_mel = torch.log(mel_spec + 1e-8)
+        return log_mel.T  # (time, n_mels)
+
+
+# Global extractor instance for efficiency
+_fbank_extractor = None
+
+
+def get_fbank_extractor():
+    global _fbank_extractor
+    if _fbank_extractor is None:
+        _fbank_extractor = FbankExtractor()
+    return _fbank_extractor
+
+
+def extract_fbank_features(audio, sample_rate=16000):
+    """
+    Extract mel filterbank features from audio.
+
+    Args:
+        audio: 1D tensor of audio samples
+        sample_rate: audio sample rate
+
+    Returns:
+        Tensor of shape (time, n_mels)
+    """
+    extractor = get_fbank_extractor()
+    return extractor(audio)
 
 
 class LibriPartyDistillationDataset:
@@ -76,6 +138,9 @@ class LibriPartyDistillationDataset:
             waveform = torchaudio.functional.resample(waveform, sr, self.sample_rate)
         audio = waveform.mean(dim=0)  # Mono
 
+        # Extract fbank features
+        fbank_features = extract_fbank_features(audio, self.sample_rate)
+
         # Load soft labels
         teacher_probs = np.load(sample["soft_label_path"])
         if teacher_probs.ndim > 1:
@@ -92,7 +157,8 @@ class LibriPartyDistillationDataset:
         )
 
         segments = extract_speech_segments_from_annotation(annotation)
-        duration_sec = len(audio) / self.sample_rate
+        num_frames = fbank_features.size(0)
+        duration_sec = num_frames * self.frame_shift_sec
         hard_labels = segments_to_frame_labels(
             segments,
             duration_sec=duration_sec,
@@ -100,14 +166,14 @@ class LibriPartyDistillationDataset:
         )
         hard_labels = torch.from_numpy(hard_labels).float()
 
-        # Align lengths (audio might have different length than soft labels)
-        min_len = min(len(audio) // 160, len(teacher_probs), len(hard_labels))
-        audio = audio[: min_len * 160]
+        # Align lengths
+        min_len = min(len(fbank_features), len(teacher_probs), len(hard_labels))
+        fbank_features = fbank_features[:min_len]
         teacher_probs = teacher_probs[:min_len]
         hard_labels = hard_labels[:min_len]
 
         return {
-            "audio": audio,
+            "fbank": fbank_features,
             "teacher_probs": teacher_probs,
             "hard_labels": hard_labels,
         }
@@ -119,13 +185,13 @@ def collate_distillation_batch(batch):
     Pads sequences to same length within batch.
     """
     batch_size = len(batch)
-    max_audio_len = max(item["audio"].size(0) for item in batch)
-    max_frame_len = max(item["teacher_probs"].size(0) for item in batch)
+    max_frame_len = max(item["fbank"].size(0) for item in batch)
+    n_mels = batch[0]["fbank"].size(1)
 
-    # Pad audio
-    audio_padded = torch.zeros(batch_size, max_audio_len)
+    # Pad fbank features
+    fbank_padded = torch.zeros(batch_size, max_frame_len, n_mels)
     for i, item in enumerate(batch):
-        audio_padded[i, : item["audio"].size(0)] = item["audio"]
+        fbank_padded[i, : item["fbank"].size(0), :] = item["fbank"]
 
     # Pad teacher probs
     teacher_probs_padded = torch.zeros(batch_size, max_frame_len)
@@ -138,7 +204,7 @@ def collate_distillation_batch(batch):
         hard_labels_padded[i, : item["hard_labels"].size(0)] = item["hard_labels"]
 
     return {
-        "audio": audio_padded,
+        "fbank": fbank_padded,
         "teacher_probs": teacher_probs_padded,
         "hard_labels": hard_labels_padded,
     }

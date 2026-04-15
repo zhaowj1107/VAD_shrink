@@ -8,6 +8,7 @@ import torch
 import torchaudio
 
 from vad_baseline.backends.common import BaseVADBackend
+from vad_baseline.distillation.dataset import extract_fbank_features
 from vad_baseline.distillation.student_model import SimplifiedCRDNN
 from vad_baseline.inference import normalize_segments
 
@@ -27,7 +28,13 @@ class DistilledBackend(BaseVADBackend):
     def load(self):
         """Load the distilled Student model."""
         if self.model is None:
-            self.model = SimplifiedCRDNN()
+            self.model = SimplifiedCRDNN(
+                input_size=80,  # 80 mel bins (matches training)
+                cnn_channels=(32, 64),
+                rnn_hidden_size=128,
+                rnn_num_layers=1,
+                dnn_hidden_size=128,
+            )
             if self.checkpoint_path:
                 checkpoint = torch.load(
                     self.checkpoint_path,
@@ -51,30 +58,19 @@ class DistilledBackend(BaseVADBackend):
         return normalize_frame_probabilities(frame_probs)
 
     def _get_frame_probs(self, model, audio_path):
-        """Get frame probabilities from audio."""
+        """Get frame probabilities from audio using fbank features."""
         # Load audio
         waveform, sr = torchaudio.load(str(audio_path))
         if sr != 16000:
             waveform = torchaudio.functional.resample(waveform, sr, 16000)
-        audio = waveform.mean(dim=0).to(self.device)
+        audio = waveform.mean(dim=0)
 
-        # Simple energy-based feature (placeholder)
-        # In production, should use same feature extraction as training
-        frame_length = 400  # 25ms at 16kHz
-        hop_length = 160  # 10ms at 16kHz
+        # Extract fbank features (same as training)
+        fbank_features = extract_fbank_features(audio, sample_rate=16000)
+        fbank_features = fbank_features.unsqueeze(0).to(self.device)  # (1, time, n_mels)
 
-        frames = []
-        for i in range(0, len(audio) - frame_length, hop_length):
-            frame = audio[i : i + frame_length]
-            energy = (frame**2).mean().sqrt()
-            frames.append(energy.item())
-
-        if not frames:
-            return np.array([])
-
-        frames = torch.tensor(frames).to(self.device)
         with torch.no_grad():
-            probs = torch.sigmoid(frames / frames.std()).cpu().numpy()
+            probs = self.model(fbank_features).cpu().numpy().flatten()
 
         return probs
 

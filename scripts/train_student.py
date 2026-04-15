@@ -93,7 +93,7 @@ def main():
     # Create Student model
     print("Creating Student model (Simplified CRDNN)...")
     student_model = SimplifiedCRDNN(
-        input_size=257,  # fbank features
+        input_size=80,  # 80 mel bins
         cnn_channels=config.cnn_channels,
         rnn_hidden_size=config.rnn_hidden_size,
         rnn_num_layers=config.rnn_num_layers,

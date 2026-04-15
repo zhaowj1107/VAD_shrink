@@ -34,8 +34,8 @@ class SimplifiedCRDNN(nn.Module):
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(0.1)
 
-        # Compute CNN output size after pooling
-        cnn_out_size = cnn_channels[1] * (input_size // 2)
+        # Compute CNN output size after pooling (2 pools with factor 2 each)
+        cnn_out_size = cnn_channels[1] * (input_size // 4)
 
         # RNN: bidirectional GRU
         self.rnn = nn.GRU(

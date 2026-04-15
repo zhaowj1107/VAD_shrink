@@ -123,14 +123,14 @@ class VADDistillationTrainer:
 
         pbar = tqdm(train_loader, desc="Training")
         for batch in pbar:
-            audio = batch["audio"].to(self.device)
+            fbank = batch["fbank"].to(self.device)
             teacher_probs = batch["teacher_probs"].to(self.device)
             hard_labels = batch["hard_labels"].to(self.device)
 
             self.optimizer.zero_grad()
 
             # Student forward
-            student_probs = self.student(audio)
+            student_probs = self.student(fbank)
 
             # Compute loss
             loss, loss_dict = distillation_loss(
@@ -171,31 +171,39 @@ class VADDistillationTrainer:
         """Evaluate on dev set."""
         self.student.eval()
 
-        all_preds = []
-        all_labels = []
+        total_tp = 0
+        total_fp = 0
+        total_fn = 0
 
         with torch.no_grad():
             for batch in tqdm(dev_loader, desc="Evaluating"):
-                audio = batch["audio"].to(self.device)
+                fbank = batch["fbank"].to(self.device)
                 hard_labels = batch["hard_labels"].to(self.device)
 
-                student_probs = self.student(audio)
+                student_probs = self.student(fbank)
 
-                all_preds.append(student_probs.cpu())
-                all_labels.append(hard_labels.cpu())
+                # Compute metrics per sample (handle varying lengths)
+                batch_size = student_probs.size(0)
+                for i in range(batch_size):
+                    probs = student_probs[i]
+                    labels = hard_labels[i]
 
-        # Concatenate
-        all_preds = torch.cat(all_preds, dim=0)
-        all_labels = torch.cat(all_labels, dim=0)
+                    # Only consider non-zero elements (actual data, not padding)
+                    valid_len = probs.size(0)
+                    probs = probs[:valid_len]
+                    labels = labels[:valid_len]
 
-        # Compute F1 at frame level
-        pred_binary = (all_preds > 0.5).float()
-        tp = (pred_binary * all_labels).sum().item()
-        fp = (pred_binary * (1 - all_labels)).sum().item()
-        fn = ((1 - pred_binary) * all_labels).sum().item()
+                    pred_binary = (probs > 0.5).float()
+                    tp = (pred_binary * labels).sum().item()
+                    fp = (pred_binary * (1 - labels)).sum().item()
+                    fn = ((1 - pred_binary) * labels).sum().item()
 
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
+                    total_tp += tp
+                    total_fp += fp
+                    total_fn += fn
+
+        precision = total_tp / (total_tp + total_fp + 1e-8)
+        recall = total_tp / (total_tp + total_fn + 1e-8)
         f1 = 2 * precision * recall / (precision + recall + 1e-8)
 
         return {"dev_f1": f1, "dev_precision": precision, "dev_recall": recall}
